@@ -39,6 +39,13 @@
   - [Import Discipline](#import-discipline)
   - [Tree Shaking Pipeline](#tree-shaking-pipeline)
   - [Tool Comparison](#tool-comparison-1)
+- [Elvis Operator in TypeScript](#elvis-operator-in-typescript)
+  - [Optional Chaining (?.)](#optional-chaining-)
+  - [Nullish Coalescing (??)](#nullish-coalescing-)
+  - [Combining Both — The True Elvis Alternative](#combining-both--the-true-elvis-alternative)
+  - [Why Not Use Logical OR (||)?](#why-not-use-logical-or-)
+  - [Nullish Coalescing Assignment (??=)](#nullish-coalescing-assignment-)
+  - [Operator Quick Reference](#operator-quick-reference)
 - [License](#license)
 
 ---
@@ -831,6 +838,231 @@ End-to-end flow showing where tree shaking fits in the Angular production build:
 | **uglify-js** | No | No | No | ES5 only; cannot parse modern Angular output |
 
 > **Angular 17+ note:** The default builder switched from `@angular-devkit/build-angular:browser` (Webpack) to `@angular-devkit/build-angular:application` (esbuild). esbuild performs tree shaking natively and is 10–100× faster than Webpack for large projects.
+
+---
+
+## Elvis Operator in TypeScript
+
+### What is the Elvis Operator?
+
+The **Elvis operator** (`?:`) is a shorthand used in languages like Kotlin, Groovy, and PHP to safely navigate a value and return a fallback if it is `null` or `undefined`. The name comes from the `?:` symbol resembling Elvis Presley's hair and eyes when rotated sideways.
+
+```kotlin
+// Kotlin — the original Elvis operator
+val city = user?.address?.city ?: "Unknown City"
+```
+
+**TypeScript does not have a `?:` Elvis operator.** Instead, it provides two purpose-built operators that together cover every use case the Elvis operator handles — with greater precision and no ambiguity around falsy values.
+
+| Elvis Use Case | TypeScript Equivalent | Operator |
+|---------------|----------------------|----------|
+| Safe property navigation | Optional Chaining | `?.` |
+| Fallback default value | Nullish Coalescing | `??` |
+| Both combined | Chain both operators | `?. ` + `??` |
+| Assign default if null/undefined | Nullish Assignment | `??=` |
+
+---
+
+### Optional Chaining (?.)
+
+**Optional chaining** safely traverses a chain of property accesses, method calls, or array index lookups. If any value in the chain is `null` or `undefined`, the entire expression short-circuits and returns `undefined` — instead of throwing a `TypeError`.
+
+```typescript
+// Without optional chaining — throws if user or address is null
+const zipCode = user.address.zipCode; // TypeError: Cannot read properties of null
+
+// With optional chaining — returns undefined safely
+const zipCode = user?.address?.zipCode;
+```
+
+**Works with method calls:**
+
+```typescript
+// Calls .toUpperCase() only if name is not null/undefined
+const upper = user?.name?.toUpperCase();
+
+// Calls the method only if the method itself exists on the object
+const result = obj?.compute?.();
+```
+
+**Works with array index access:**
+
+```typescript
+const firstTag = article?.tags?.[0];
+```
+
+**Works with dynamic property access:**
+
+```typescript
+const value = config?.['feature-flags']?.['dark-mode'];
+```
+
+> **TypeScript + strict mode:** With `"noUncheckedIndexedAccess": true` (enabled in this project's `tsconfig.json`), array access already returns `T | undefined`. Combining it with `?.` ensures the entire chain is safely typed end-to-end.
+
+---
+
+### Nullish Coalescing (??)
+
+**Nullish coalescing** returns the right-hand operand when the left-hand operand is strictly `null` or `undefined`. It is the precise replacement for using `||` as a fallback — without the footgun of triggering on all falsy values.
+
+```typescript
+const name = inputName ?? "Anonymous";
+// Returns "Anonymous" only when inputName is null or undefined
+// Returns inputName as-is for "", 0, false, or NaN
+```
+
+**Nested fallback chain:**
+
+```typescript
+const displayName = user.nickname ?? user.username ?? user.email ?? "Guest";
+```
+
+**With function calls:**
+
+```typescript
+const timeout = getConfig()?.timeout ?? 3000;
+```
+
+---
+
+### Combining Both — The True Elvis Alternative
+
+To fully replicate the Elvis operator — navigate a chain safely **and** provide a default if anything in the chain is missing — compose `?.` and `??` together:
+
+```typescript
+// Kotlin Elvis equivalent
+// val city = user?.address?.city ?: "Unknown City"
+
+// TypeScript equivalent
+const city = user?.address?.city ?? "Unknown City";
+```
+
+**Real-world examples:**
+
+```typescript
+interface User {
+  profile?: {
+    address?: {
+      city?: string;
+      zipCode?: string;
+    };
+    displayName?: string;
+  };
+  settings?: {
+    theme?: 'light' | 'dark';
+    language?: string;
+  };
+}
+
+const city        = user?.profile?.address?.city        ?? "Unknown City";
+const displayName = user?.profile?.displayName          ?? "Anonymous";
+const theme       = user?.settings?.theme               ?? "light";
+const language    = user?.settings?.language            ?? navigator.language ?? "en";
+```
+
+**With method calls and fallback:**
+
+```typescript
+const formatted = user?.profile?.displayName?.trim() ?? "Guest";
+```
+
+---
+
+### Why Not Use Logical OR (||)?
+
+Before `??` was introduced (TypeScript 3.7 / ES2020), developers used `||` as a makeshift Elvis fallback. This is still common in legacy codebases, but it carries a significant semantic flaw: `||` activates on **all falsy values** — not just `null` and `undefined`.
+
+```typescript
+const count = 0;
+const label = "";
+const active = false;
+
+// Using || — WRONG for these cases
+const result1 = count  || 10;      // ❌  Returns 10  (0 is falsy)
+const result2 = label  || "N/A";   // ❌  Returns "N/A" ("" is falsy)
+const result3 = active || true;    // ❌  Returns true  (false is falsy)
+
+// Using ?? — CORRECT
+const result4 = count  ?? 10;      // ✅  Returns 0   (0 is not null/undefined)
+const result5 = label  ?? "N/A";   // ✅  Returns ""  ("" is not null/undefined)
+const result6 = active ?? true;    // ✅  Returns false (false is not null/undefined)
+```
+
+**Rule of thumb:**
+
+| Operator | Triggers on | Use when |
+|----------|------------|----------|
+| `\|\|` | Any falsy value (`0`, `""`, `false`, `null`, `undefined`, `NaN`) | You want a fallback for all falsy values (rare) |
+| `??` | Only `null` or `undefined` | You want a fallback specifically for missing values (almost always) |
+
+---
+
+### Nullish Coalescing Assignment (??=)
+
+The **nullish coalescing assignment** operator (`??=`) assigns a value to a variable only when that variable is currently `null` or `undefined`. It is shorthand for the common pattern of checking and then assigning a default.
+
+```typescript
+// Verbose form
+if (settings.theme === null || settings.theme === undefined) {
+  settings.theme = "dark";
+}
+
+// Equivalent shorthand
+settings.theme ??= "dark";
+```
+
+**Practical use cases:**
+
+```typescript
+// Initialize optional config properties with defaults
+function applyDefaults(config: Partial<AppConfig>): AppConfig {
+  config.theme    ??= "light";
+  config.language ??= "en";
+  config.timeout  ??= 5000;
+  config.retries  ??= 3;
+  return config as AppConfig;
+}
+
+// Lazy initialization of a cached value
+class DataService {
+  private _cache: Map<string, unknown> | null = null;
+
+  get cache() {
+    this._cache ??= new Map();
+    return this._cache;
+  }
+}
+```
+
+**Related assignment operators for completeness:**
+
+```typescript
+a ||= b;   // Assign b if a is falsy     (logical OR assignment)
+a &&= b;   // Assign b if a is truthy    (logical AND assignment)
+a ??= b;   // Assign b if a is nullish   (nullish coalescing assignment)
+```
+
+---
+
+### Operator Quick Reference
+
+| Operator | Name | Returns | Short-circuits on |
+|----------|------|---------|-------------------|
+| `a?.b` | Optional chaining | `a.b` or `undefined` | `a` is `null` or `undefined` |
+| `a ?? b` | Nullish coalescing | `a` or `b` | `a` is **not** `null`/`undefined` |
+| `a ??= b` | Nullish assignment | assigns `b` to `a` | `a` is already non-nullish |
+| `a \|\| b` | Logical OR | `a` or `b` | `a` is truthy |
+| `a && b` | Logical AND | `a` or `b` | `a` is falsy |
+
+**TypeScript version availability:**
+
+| Operator | Introduced in TypeScript | ECMAScript Equivalent |
+|----------|--------------------------|-----------------------|
+| `?.` | TypeScript 3.7 | ES2020 |
+| `??` | TypeScript 3.7 | ES2020 |
+| `??=` | TypeScript 4.0 | ES2021 |
+
+> **tsconfig.json note:** With `"target": "esnext"` (set in this project), all three operators are emitted as-is in the compiled output — the TypeScript compiler does not need to polyfill or downlevel them. Targeting `"es5"` or `"es2019"` would cause `tsc` to transform them into equivalent verbose expressions automatically.
 
 ---
 
