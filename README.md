@@ -31,6 +31,21 @@
   - [3. Terser — Modern Alternative](#3-terser--modern-alternative)
   - [TypeScript + Minification Pipeline](#typescript--minification-pipeline)
   - [Key Benefits](#key-benefits)
+- [Tree Shaking](#tree-shaking)
+  - [What is Tree Shaking?](#what-is-tree-shaking)
+  - [How Angular Tree Shaking Works](#how-angular-tree-shaking-works)
+  - [Ensuring Tree Shaking is Active](#ensuring-tree-shaking-is-active)
+  - [angular.json Production Configuration](#angularjson-production-configuration)
+  - [Import Discipline](#import-discipline)
+  - [Tree Shaking Pipeline](#tree-shaking-pipeline)
+  - [Tool Comparison](#tool-comparison-1)
+- [Elvis Operator in TypeScript](#elvis-operator-in-typescript)
+  - [Optional Chaining (?.)](#optional-chaining-)
+  - [Nullish Coalescing (??)](#nullish-coalescing-)
+  - [Combining Both — The True Elvis Alternative](#combining-both--the-true-elvis-alternative)
+  - [Why Not Use Logical OR (||)?](#why-not-use-logical-or-)
+  - [Nullish Coalescing Assignment (??=)](#nullish-coalescing-assignment-)
+  - [Operator Quick Reference](#operator-quick-reference)
 - [License](#license)
 
 ---
@@ -620,6 +635,434 @@ npx tsc && npx terser dist/main.js --mangle --compress --output dist/main.min.js
 | **Lower memory pressure** | Smaller scripts occupy less memory in the V8 heap during initial parse |
 
 > **Security note:** Minification is **not** a substitute for real obfuscation or access control. Anyone with browser DevTools and a source map can restore the original structure. Do not rely on it to protect sensitive business logic — keep that server-side.
+
+---
+
+## Tree Shaking
+
+### What is Tree Shaking?
+
+**Tree shaking** is a dead-code elimination technique applied during the production build process. The term comes from the mental model of shaking a dependency tree: modules and functions that nothing references fall out of the bundle, while only the code that is actually reachable from your application's entry point is kept.
+
+In the context of **Angular + TypeScript**, tree shaking is not a single feature — it is the combined result of three interlocking mechanisms:
+
+| Mechanism | Role |
+|-----------|------|
+| **ES Modules (`import`/`export`)** | Static, analyzable import graph — no dynamic `require()` that would prevent static analysis |
+| **Ahead-of-Time (AOT) Compilation** | Templates compiled at build time, making component dependencies statically known |
+| **Angular Ivy** | Generates granular, per-feature instructions that are individually tree-shakeable |
+
+> **Why it matters:** A freshly scaffolded Angular application ships the entire `@angular/core`, `@angular/common`, and `@angular/forms` packages unless tree shaking removes the portions your app never touches. In large applications this can represent megabytes of unused code.
+
+---
+
+### How Angular Tree Shaking Works
+
+**1. Dead Code Elimination via the Import Graph**
+
+Angular's build tool (powered by esbuild or Webpack) traverses every `import` statement starting from `main.ts`. If a symbol is imported but its exported value is never referenced in any reachable code path, it is marked dead and excluded from the final bundle.
+
+```typescript
+// BAD — imports the entire library; tree shaking may miss unused parts
+import * as _ from 'lodash';
+
+// GOOD — imports only what is used; everything else is pruned
+import { debounce } from 'lodash-es';
+```
+
+**2. Ahead-of-Time (AOT) Compilation**
+
+During `ng build --configuration production`, Angular compiles your component templates from HTML to TypeScript factory functions at build time (not in the browser at runtime). This converts template bindings into static JavaScript references, making all template dependencies visible to the bundler's static analyzer — and therefore eligible for elimination if unused.
+
+```
+Template compilation (AOT)
+  ├─ <app-button> → references ButtonComponent class → kept
+  ├─ <mat-icon>   → references MatIconModule → kept
+  └─ <mat-table>  → never used in templates → eliminated
+```
+
+**3. Angular Ivy — Granular Tree-Shakeable Instructions**
+
+The **Ivy rendering engine** (default since Angular 9) generates locality-based, instruction-level code. Each framework feature — animations, internationalization, reactive forms, common directives — is compiled into a discrete instruction set. If a component's template never invokes an animation, the entire animation engine is absent from the final bundle.
+
+```typescript
+// Component never uses animations → AnimationModule is tree-shaken out
+@Component({
+  template: `<p>Hello</p>`  // no [@trigger] bindings
+})
+export class SimpleComponent {}
+```
+
+---
+
+### Ensuring Tree Shaking is Active
+
+Tree shaking is **not active during `ng serve`** (development mode). It only runs as part of a production build. Attempting to measure bundle size on a dev server output will give misleading numbers.
+
+| Command | Tree Shaking | AOT | Minification | Use Case |
+|---------|-------------|-----|--------------|----------|
+| `ng serve` | No | No | No | Local development |
+| `ng build` | Partial | Yes | No | Staging / QA |
+| `ng build --configuration production` | Yes | Yes | Yes | Production deployment |
+
+**Always use the production configuration for size measurements and deployments:**
+
+```bash
+ng build --configuration production
+```
+
+**Analyze the output bundle after building:**
+
+```bash
+# Install the bundle analyzer
+npm install --save-dev webpack-bundle-analyzer
+
+# Build with stats output
+ng build --configuration production --stats-json
+
+# Launch visual report
+npx webpack-bundle-analyzer dist/<your-app>/stats.json
+```
+
+---
+
+### angular.json Production Configuration
+
+In `angular.json`, verify that your production configuration has both `optimization` and `buildOptimizer` enabled. These are the flags that activate tree shaking, Terser minification, and Angular's additional dead-code passes:
+
+```json
+{
+  "configurations": {
+    "production": {
+      "optimization": true,
+      "buildOptimizer": true,
+      "aot": true,
+      "sourceMap": false,
+      "namedChunks": false,
+      "extractLicenses": true,
+      "vendorChunk": false
+    }
+  }
+}
+```
+
+| Property | Value | Effect |
+|----------|-------|--------|
+| `optimization` | `true` | Enables Terser minification, scope hoisting, and dead-code removal |
+| `buildOptimizer` | `true` | Applies Angular-specific optimizations: removes decorator metadata, simplifies component factories |
+| `aot` | `true` | Compiles templates at build time — required for full tree shaking |
+| `sourceMap` | `false` | Omits source maps from the production bundle (enable if using remote error monitoring) |
+| `namedChunks` | `false` | Uses content hashes for chunk filenames instead of readable names — improves long-term caching |
+| `extractLicenses` | `true` | Extracts third-party license headers into a separate `3rdpartylicenses.txt` file |
+| `vendorChunk` | `false` | Merges vendor code into the main chunk — reduces HTTP requests when HTTP/2 is available |
+
+---
+
+### Import Discipline
+
+How you write `import` statements is the single biggest factor you control over tree-shaking effectiveness.
+
+**Avoid barrel imports from large libraries:**
+
+```typescript
+// BAD — forces the entire @angular/material bundle into scope
+import { MatButtonModule, MatIconModule, MatTableModule } from '@angular/material';
+
+// GOOD — each module is a discrete chunk; only imported ones are included
+import { MatButtonModule } from '@angular/material/button';
+import { MatIconModule } from '@angular/material/icon';
+```
+
+**Avoid side-effect imports unless necessary:**
+
+```typescript
+// BAD — prevents tree shaking of the entire module
+import 'rxjs/add/operator/map';
+
+// GOOD — pipeable operators are individually tree-shakeable
+import { map } from 'rxjs/operators';
+```
+
+**Use `import type` for type-only references (enforced by `verbatimModuleSyntax: true`):**
+
+```typescript
+// Type import — fully erased at compile time, zero bundle impact
+import type { User } from './models/user';
+
+// Value import — included in the bundle if the symbol is used at runtime
+import { UserService } from './services/user.service';
+```
+
+---
+
+### Tree Shaking Pipeline
+
+End-to-end flow showing where tree shaking fits in the Angular production build:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│               Angular Production Build Pipeline (ng build --prod)           │
+│                                                                              │
+│   src/main.ts                                                                │
+│       │                                                                      │
+│       │  Step 1: AOT Compiler (ngc)                                         │
+│       │  Templates → TypeScript factory functions                            │
+│       │  All dependencies become statically visible                          │
+│       │                                                                      │
+│       │  Step 2: esbuild / Webpack — Module Bundling                        │
+│       │  Traverses import graph from main.ts                                 │
+│       │  Marks every unreachable export as dead code                         │
+│       │                                                                      │
+│       │  Step 3: Terser — Minification + Tree Shaking                       │
+│       │  Eliminates dead code, mangles identifiers, compresses output        │
+│       │                                                                      │
+│       └──► dist/<app>/                                                       │
+│               ├── main.<hash>.js      ◄── app code, tree-shaken + minified  │
+│               ├── polyfills.<hash>.js ◄── browser compatibility shims       │
+│               ├── runtime.<hash>.js   ◄── webpack/esbuild bootstrap         │
+│               └── styles.<hash>.css   ◄── extracted and purged CSS          │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Tool Comparison
+
+| Tool | Tree Shaking | TypeScript | Angular Support | Notes |
+|------|-------------|------------|-----------------|-------|
+| **esbuild** (Angular 17+) | Yes | Yes | Native | Fastest build tool available; default in Angular 17+ |
+| **Webpack** (Angular <17) | Yes | Yes | Native | Mature ecosystem; slower than esbuild |
+| **Rollup** | Yes | Via plugin | Manual | Best for library builds, not Angular apps |
+| **Vite** | Yes | Yes | Via plugin | Popular for standalone TypeScript projects |
+| **Terser** | Partial | Post-compile | Via bundler | Minifier only — handles dead-code within a single file |
+| **uglify-js** | No | No | No | ES5 only; cannot parse modern Angular output |
+
+> **Angular 17+ note:** The default builder switched from `@angular-devkit/build-angular:browser` (Webpack) to `@angular-devkit/build-angular:application` (esbuild). esbuild performs tree shaking natively and is 10–100× faster than Webpack for large projects.
+
+---
+
+## Elvis Operator in TypeScript
+
+### What is the Elvis Operator?
+
+The **Elvis operator** (`?:`) is a shorthand used in languages like Kotlin, Groovy, and PHP to safely navigate a value and return a fallback if it is `null` or `undefined`. The name comes from the `?:` symbol resembling Elvis Presley's hair and eyes when rotated sideways.
+
+```kotlin
+// Kotlin — the original Elvis operator
+val city = user?.address?.city ?: "Unknown City"
+```
+
+**TypeScript does not have a `?:` Elvis operator.** Instead, it provides two purpose-built operators that together cover every use case the Elvis operator handles — with greater precision and no ambiguity around falsy values.
+
+| Elvis Use Case | TypeScript Equivalent | Operator |
+|---------------|----------------------|----------|
+| Safe property navigation | Optional Chaining | `?.` |
+| Fallback default value | Nullish Coalescing | `??` |
+| Both combined | Chain both operators | `?. ` + `??` |
+| Assign default if null/undefined | Nullish Assignment | `??=` |
+
+---
+
+### Optional Chaining (?.)
+
+**Optional chaining** safely traverses a chain of property accesses, method calls, or array index lookups. If any value in the chain is `null` or `undefined`, the entire expression short-circuits and returns `undefined` — instead of throwing a `TypeError`.
+
+```typescript
+// Without optional chaining — throws if user or address is null
+const zipCode = user.address.zipCode; // TypeError: Cannot read properties of null
+
+// With optional chaining — returns undefined safely
+const zipCode = user?.address?.zipCode;
+```
+
+**Works with method calls:**
+
+```typescript
+// Calls .toUpperCase() only if name is not null/undefined
+const upper = user?.name?.toUpperCase();
+
+// Calls the method only if the method itself exists on the object
+const result = obj?.compute?.();
+```
+
+**Works with array index access:**
+
+```typescript
+const firstTag = article?.tags?.[0];
+```
+
+**Works with dynamic property access:**
+
+```typescript
+const value = config?.['feature-flags']?.['dark-mode'];
+```
+
+> **TypeScript + strict mode:** With `"noUncheckedIndexedAccess": true` (enabled in this project's `tsconfig.json`), array access already returns `T | undefined`. Combining it with `?.` ensures the entire chain is safely typed end-to-end.
+
+---
+
+### Nullish Coalescing (??)
+
+**Nullish coalescing** returns the right-hand operand when the left-hand operand is strictly `null` or `undefined`. It is the precise replacement for using `||` as a fallback — without the footgun of triggering on all falsy values.
+
+```typescript
+const name = inputName ?? "Anonymous";
+// Returns "Anonymous" only when inputName is null or undefined
+// Returns inputName as-is for "", 0, false, or NaN
+```
+
+**Nested fallback chain:**
+
+```typescript
+const displayName = user.nickname ?? user.username ?? user.email ?? "Guest";
+```
+
+**With function calls:**
+
+```typescript
+const timeout = getConfig()?.timeout ?? 3000;
+```
+
+---
+
+### Combining Both — The True Elvis Alternative
+
+To fully replicate the Elvis operator — navigate a chain safely **and** provide a default if anything in the chain is missing — compose `?.` and `??` together:
+
+```typescript
+// Kotlin Elvis equivalent
+// val city = user?.address?.city ?: "Unknown City"
+
+// TypeScript equivalent
+const city = user?.address?.city ?? "Unknown City";
+```
+
+**Real-world examples:**
+
+```typescript
+interface User {
+  profile?: {
+    address?: {
+      city?: string;
+      zipCode?: string;
+    };
+    displayName?: string;
+  };
+  settings?: {
+    theme?: 'light' | 'dark';
+    language?: string;
+  };
+}
+
+const city        = user?.profile?.address?.city        ?? "Unknown City";
+const displayName = user?.profile?.displayName          ?? "Anonymous";
+const theme       = user?.settings?.theme               ?? "light";
+const language    = user?.settings?.language            ?? navigator.language ?? "en";
+```
+
+**With method calls and fallback:**
+
+```typescript
+const formatted = user?.profile?.displayName?.trim() ?? "Guest";
+```
+
+---
+
+### Why Not Use Logical OR (||)?
+
+Before `??` was introduced (TypeScript 3.7 / ES2020), developers used `||` as a makeshift Elvis fallback. This is still common in legacy codebases, but it carries a significant semantic flaw: `||` activates on **all falsy values** — not just `null` and `undefined`.
+
+```typescript
+const count = 0;
+const label = "";
+const active = false;
+
+// Using || — WRONG for these cases
+const result1 = count  || 10;      // ❌  Returns 10  (0 is falsy)
+const result2 = label  || "N/A";   // ❌  Returns "N/A" ("" is falsy)
+const result3 = active || true;    // ❌  Returns true  (false is falsy)
+
+// Using ?? — CORRECT
+const result4 = count  ?? 10;      // ✅  Returns 0   (0 is not null/undefined)
+const result5 = label  ?? "N/A";   // ✅  Returns ""  ("" is not null/undefined)
+const result6 = active ?? true;    // ✅  Returns false (false is not null/undefined)
+```
+
+**Rule of thumb:**
+
+| Operator | Triggers on | Use when |
+|----------|------------|----------|
+| `\|\|` | Any falsy value (`0`, `""`, `false`, `null`, `undefined`, `NaN`) | You want a fallback for all falsy values (rare) |
+| `??` | Only `null` or `undefined` | You want a fallback specifically for missing values (almost always) |
+
+---
+
+### Nullish Coalescing Assignment (??=)
+
+The **nullish coalescing assignment** operator (`??=`) assigns a value to a variable only when that variable is currently `null` or `undefined`. It is shorthand for the common pattern of checking and then assigning a default.
+
+```typescript
+// Verbose form
+if (settings.theme === null || settings.theme === undefined) {
+  settings.theme = "dark";
+}
+
+// Equivalent shorthand
+settings.theme ??= "dark";
+```
+
+**Practical use cases:**
+
+```typescript
+// Initialize optional config properties with defaults
+function applyDefaults(config: Partial<AppConfig>): AppConfig {
+  config.theme    ??= "light";
+  config.language ??= "en";
+  config.timeout  ??= 5000;
+  config.retries  ??= 3;
+  return config as AppConfig;
+}
+
+// Lazy initialization of a cached value
+class DataService {
+  private _cache: Map<string, unknown> | null = null;
+
+  get cache() {
+    this._cache ??= new Map();
+    return this._cache;
+  }
+}
+```
+
+**Related assignment operators for completeness:**
+
+```typescript
+a ||= b;   // Assign b if a is falsy     (logical OR assignment)
+a &&= b;   // Assign b if a is truthy    (logical AND assignment)
+a ??= b;   // Assign b if a is nullish   (nullish coalescing assignment)
+```
+
+---
+
+### Operator Quick Reference
+
+| Operator | Name | Returns | Short-circuits on |
+|----------|------|---------|-------------------|
+| `a?.b` | Optional chaining | `a.b` or `undefined` | `a` is `null` or `undefined` |
+| `a ?? b` | Nullish coalescing | `a` or `b` | `a` is **not** `null`/`undefined` |
+| `a ??= b` | Nullish assignment | assigns `b` to `a` | `a` is already non-nullish |
+| `a \|\| b` | Logical OR | `a` or `b` | `a` is truthy |
+| `a && b` | Logical AND | `a` or `b` | `a` is falsy |
+
+**TypeScript version availability:**
+
+| Operator | Introduced in TypeScript | ECMAScript Equivalent |
+|----------|--------------------------|-----------------------|
+| `?.` | TypeScript 3.7 | ES2020 |
+| `??` | TypeScript 3.7 | ES2020 |
+| `??=` | TypeScript 4.0 | ES2021 |
+
+> **tsconfig.json note:** With `"target": "esnext"` (set in this project), all three operators are emitted as-is in the compiled output — the TypeScript compiler does not need to polyfill or downlevel them. Targeting `"es5"` or `"es2019"` would cause `tsc` to transform them into equivalent verbose expressions automatically.
 
 ---
 
