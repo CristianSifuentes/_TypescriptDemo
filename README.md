@@ -24,6 +24,13 @@
   - [Recommended Compiler Options](#recommended-compiler-options)
 - [Project Structure](#project-structure)
 - [Scripts](#scripts)
+- [Minification & Uglification](#minification--uglification)
+  - [What is Uglification?](#what-is-uglification)
+  - [1. uglify-js via CLI](#1-uglify-js-via-cli)
+  - [2. Web-Based Tools](#2-web-based-tools)
+  - [3. Terser — Modern Alternative](#3-terser--modern-alternative)
+  - [TypeScript + Minification Pipeline](#typescript--minification-pipeline)
+  - [Key Benefits](#key-benefits)
 - [License](#license)
 
 ---
@@ -432,6 +439,187 @@ Add these to the `scripts` section of `package.json`:
 | `clean` | `npm run clean` | Removes the `dist/` output directory entirely |
 | `start` | `npm start` | Runs `node dist/main.js` with source maps enabled for readable stack traces |
 | `dev` | `npm run dev` | Compiles in watch mode and auto-restarts Node.js via `--watch` on new output |
+
+---
+
+## Minification & Uglification
+
+### What is Uglification?
+
+**Uglifying JavaScript** is the process of minifying your source code by removing every character that is meaningful to humans but irrelevant to the JavaScript engine — whitespace, newlines, and comments — while also renaming variables and function identifiers to the shortest possible names (typically single letters).
+
+The result is semantically identical code that:
+
+- Loads and parses faster due to dramatically reduced file size
+- Transfers more efficiently over HTTP/2 and HTTP/3
+- Provides a degree of light obfuscation, making logical structures harder to reverse-engineer at a glance
+
+> **TypeScript context:** You always minify the **compiled `.js` output** in `dist/`, never the `.ts` source. The TypeScript compilation step (`npx tsc`) happens first; minification is the final step before deployment.
+
+---
+
+### 1. uglify-js via CLI
+
+`uglify-js` is the classic, battle-tested industry tool for JavaScript minification, available as an npm package.
+
+**Install globally:**
+
+```bash
+npm install uglify-js -g
+```
+
+**Basic minification** — removes whitespace, comments, and newlines:
+
+```bash
+uglifyjs dist/main.js -o dist/main.min.js
+```
+
+**Full optimization** — minification + name mangling + compression (recommended):
+
+```bash
+uglifyjs dist/main.js -m -c -o dist/main.min.js
+```
+
+| Flag | Full Name | Effect |
+|------|-----------|--------|
+| `-o` | `--output` | Specifies the output file path |
+| `-m` | `--mangle` | Renames variables and functions to single-letter identifiers — the biggest size reduction after whitespace removal |
+| `-c` | `--compress` | Applies code transformations: dead-code elimination, constant folding, `if`→ternary rewrites, and more |
+
+**Inspect what changed:**
+
+```bash
+# Compare original vs minified size
+wc -c dist/main.js dist/main.min.js
+
+# Pretty-print the minified output to audit it
+uglifyjs dist/main.min.js --beautify -o dist/main.readable.js
+```
+
+> **Limitation:** `uglify-js` was built for ES5. If your `tsconfig.json` targets `"esnext"` or `"es2020+"`, the compiled output may include arrow functions, `class` syntax, optional chaining, or nullish coalescing — all of which can cause `uglify-js` to throw parse errors. Use **Terser** instead (see below).
+
+---
+
+### 2. Web-Based Tools
+
+For quick, one-off compressions or visual inspection without installing anything:
+
+| Tool | URL | Notes |
+|------|-----|-------|
+| UglifyJS 3 Online Minifier | `skalman.github.io/UglifyJS-online` | Wraps the official `uglify-js` v3 in a browser UI |
+| JS Minify and Beautify | `javascript-minifier.com` | Supports minify and reverse beautify in one page |
+| Terser REPL | `try.terser.org` | Interactive Terser playground with full option control |
+
+> Web tools are suitable for inspecting output or compressing one-off scripts. For reproducible, automated builds always use a local CLI tool or bundler plugin.
+
+---
+
+### 3. Terser — Modern Alternative
+
+**Terser** is a community fork of `uglify-js` that fully supports modern ECMAScript (ES6+) syntax. It is the de facto standard minifier used internally by Webpack, Vite, esbuild, and Rollup.
+
+**Run without installing** (via `npx`):
+
+```bash
+npx terser dist/main.js --mangle --compress --output dist/main.min.js
+```
+
+**With source map support** (highly recommended for production debugging):
+
+```bash
+npx terser dist/main.js \
+  --mangle \
+  --compress \
+  --source-map "content='dist/main.js.map',url='main.min.js.map'" \
+  --output dist/main.min.js
+```
+
+**Install as a dev dependency** (preferred for reproducible builds):
+
+```bash
+npm install terser --save-dev
+```
+
+Then add to `package.json` scripts:
+
+```json
+{
+  "scripts": {
+    "build": "tsc",
+    "minify": "terser dist/main.js --mangle --compress --output dist/main.min.js",
+    "build:prod": "npm run build && npm run minify"
+  }
+}
+```
+
+**Key Terser flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--mangle` | Renames local variables and functions to shortest possible names |
+| `--compress` | Enables the optimizer: dead-code elimination, constant folding, inlining |
+| `--output` | Path of the minified output file |
+| `--source-map` | Generates a `.map` file referencing the original compiled output |
+| `--module` | Enables ES module mode (required when source uses `import`/`export`) |
+| `--ecma 2020` | Sets the target ECMAScript version for syntax-level optimizations |
+
+---
+
+### TypeScript + Minification Pipeline
+
+The complete production build flow with TypeScript and Terser:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     TypeScript → Production Pipeline                        │
+│                                                                             │
+│   src/main.ts                                                               │
+│       │                                                                     │
+│       │  Step 1: npx tsc                                                   │
+│       │                                                                     │
+│       ├──► dist/main.js          ◄── full compiled JS (readable)           │
+│       └──► dist/main.js.map      ◄── source map                            │
+│                │                                                            │
+│                │  Step 2: npx terser dist/main.js --mangle --compress      │
+│                │                                                            │
+│                ├──► dist/main.min.js      ◄── minified, deployment-ready   │
+│                └──► dist/main.min.js.map  ◄── source map chain             │
+│                                                                             │
+│   node dist/main.min.js                                                    │
+│       └──► smallest possible runtime footprint                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Two-step production build command:**
+
+```bash
+npx tsc && npx terser dist/main.js --mangle --compress --output dist/main.min.js
+```
+
+**Tool comparison:**
+
+| Tool | ES6+ Support | Source Maps | Tree Shaking | Best For |
+|------|-------------|-------------|--------------|----------|
+| `uglify-js` | No (ES5 only) | Yes | No | Legacy ES5 codebases |
+| `terser` | Yes (ES2020+) | Yes | No | Modern Node.js / standalone scripts |
+| Webpack + TerserPlugin | Yes | Yes | Yes | Application bundles |
+| Vite / Rollup | Yes | Yes | Yes | Frontend / library builds |
+
+> **For this project:** `terser` is the recommended choice since `tsconfig.json` targets `"esnext"` and outputs modern JavaScript that `uglify-js` cannot safely parse.
+
+---
+
+### Key Benefits
+
+| Benefit | Detail |
+|---------|--------|
+| **File size reduction** | Minification + mangling routinely achieves **50–70% size reduction** on real-world JavaScript files |
+| **Faster HTTP transfers** | Smaller assets mean fewer bytes transferred over the wire — critical on mobile networks and for Core Web Vitals scores |
+| **Faster parse time** | The JavaScript engine spends less time lexing and parsing a compact file |
+| **Light obfuscation** | Mangled identifiers (`a`, `b`, `c`) make logical structures significantly harder to reverse-engineer without source maps |
+| **Lower memory pressure** | Smaller scripts occupy less memory in the V8 heap during initial parse |
+
+> **Security note:** Minification is **not** a substitute for real obfuscation or access control. Anyone with browser DevTools and a source map can restore the original structure. Do not rely on it to protect sensitive business logic — keep that server-side.
 
 ---
 
