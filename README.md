@@ -31,6 +31,14 @@
   - [3. Terser — Modern Alternative](#3-terser--modern-alternative)
   - [TypeScript + Minification Pipeline](#typescript--minification-pipeline)
   - [Key Benefits](#key-benefits)
+- [Tree Shaking](#tree-shaking)
+  - [What is Tree Shaking?](#what-is-tree-shaking)
+  - [How Angular Tree Shaking Works](#how-angular-tree-shaking-works)
+  - [Ensuring Tree Shaking is Active](#ensuring-tree-shaking-is-active)
+  - [angular.json Production Configuration](#angularjson-production-configuration)
+  - [Import Discipline](#import-discipline)
+  - [Tree Shaking Pipeline](#tree-shaking-pipeline)
+  - [Tool Comparison](#tool-comparison-1)
 - [License](#license)
 
 ---
@@ -620,6 +628,209 @@ npx tsc && npx terser dist/main.js --mangle --compress --output dist/main.min.js
 | **Lower memory pressure** | Smaller scripts occupy less memory in the V8 heap during initial parse |
 
 > **Security note:** Minification is **not** a substitute for real obfuscation or access control. Anyone with browser DevTools and a source map can restore the original structure. Do not rely on it to protect sensitive business logic — keep that server-side.
+
+---
+
+## Tree Shaking
+
+### What is Tree Shaking?
+
+**Tree shaking** is a dead-code elimination technique applied during the production build process. The term comes from the mental model of shaking a dependency tree: modules and functions that nothing references fall out of the bundle, while only the code that is actually reachable from your application's entry point is kept.
+
+In the context of **Angular + TypeScript**, tree shaking is not a single feature — it is the combined result of three interlocking mechanisms:
+
+| Mechanism | Role |
+|-----------|------|
+| **ES Modules (`import`/`export`)** | Static, analyzable import graph — no dynamic `require()` that would prevent static analysis |
+| **Ahead-of-Time (AOT) Compilation** | Templates compiled at build time, making component dependencies statically known |
+| **Angular Ivy** | Generates granular, per-feature instructions that are individually tree-shakeable |
+
+> **Why it matters:** A freshly scaffolded Angular application ships the entire `@angular/core`, `@angular/common`, and `@angular/forms` packages unless tree shaking removes the portions your app never touches. In large applications this can represent megabytes of unused code.
+
+---
+
+### How Angular Tree Shaking Works
+
+**1. Dead Code Elimination via the Import Graph**
+
+Angular's build tool (powered by esbuild or Webpack) traverses every `import` statement starting from `main.ts`. If a symbol is imported but its exported value is never referenced in any reachable code path, it is marked dead and excluded from the final bundle.
+
+```typescript
+// BAD — imports the entire library; tree shaking may miss unused parts
+import * as _ from 'lodash';
+
+// GOOD — imports only what is used; everything else is pruned
+import { debounce } from 'lodash-es';
+```
+
+**2. Ahead-of-Time (AOT) Compilation**
+
+During `ng build --configuration production`, Angular compiles your component templates from HTML to TypeScript factory functions at build time (not in the browser at runtime). This converts template bindings into static JavaScript references, making all template dependencies visible to the bundler's static analyzer — and therefore eligible for elimination if unused.
+
+```
+Template compilation (AOT)
+  ├─ <app-button> → references ButtonComponent class → kept
+  ├─ <mat-icon>   → references MatIconModule → kept
+  └─ <mat-table>  → never used in templates → eliminated
+```
+
+**3. Angular Ivy — Granular Tree-Shakeable Instructions**
+
+The **Ivy rendering engine** (default since Angular 9) generates locality-based, instruction-level code. Each framework feature — animations, internationalization, reactive forms, common directives — is compiled into a discrete instruction set. If a component's template never invokes an animation, the entire animation engine is absent from the final bundle.
+
+```typescript
+// Component never uses animations → AnimationModule is tree-shaken out
+@Component({
+  template: `<p>Hello</p>`  // no [@trigger] bindings
+})
+export class SimpleComponent {}
+```
+
+---
+
+### Ensuring Tree Shaking is Active
+
+Tree shaking is **not active during `ng serve`** (development mode). It only runs as part of a production build. Attempting to measure bundle size on a dev server output will give misleading numbers.
+
+| Command | Tree Shaking | AOT | Minification | Use Case |
+|---------|-------------|-----|--------------|----------|
+| `ng serve` | No | No | No | Local development |
+| `ng build` | Partial | Yes | No | Staging / QA |
+| `ng build --configuration production` | Yes | Yes | Yes | Production deployment |
+
+**Always use the production configuration for size measurements and deployments:**
+
+```bash
+ng build --configuration production
+```
+
+**Analyze the output bundle after building:**
+
+```bash
+# Install the bundle analyzer
+npm install --save-dev webpack-bundle-analyzer
+
+# Build with stats output
+ng build --configuration production --stats-json
+
+# Launch visual report
+npx webpack-bundle-analyzer dist/<your-app>/stats.json
+```
+
+---
+
+### angular.json Production Configuration
+
+In `angular.json`, verify that your production configuration has both `optimization` and `buildOptimizer` enabled. These are the flags that activate tree shaking, Terser minification, and Angular's additional dead-code passes:
+
+```json
+{
+  "configurations": {
+    "production": {
+      "optimization": true,
+      "buildOptimizer": true,
+      "aot": true,
+      "sourceMap": false,
+      "namedChunks": false,
+      "extractLicenses": true,
+      "vendorChunk": false
+    }
+  }
+}
+```
+
+| Property | Value | Effect |
+|----------|-------|--------|
+| `optimization` | `true` | Enables Terser minification, scope hoisting, and dead-code removal |
+| `buildOptimizer` | `true` | Applies Angular-specific optimizations: removes decorator metadata, simplifies component factories |
+| `aot` | `true` | Compiles templates at build time — required for full tree shaking |
+| `sourceMap` | `false` | Omits source maps from the production bundle (enable if using remote error monitoring) |
+| `namedChunks` | `false` | Uses content hashes for chunk filenames instead of readable names — improves long-term caching |
+| `extractLicenses` | `true` | Extracts third-party license headers into a separate `3rdpartylicenses.txt` file |
+| `vendorChunk` | `false` | Merges vendor code into the main chunk — reduces HTTP requests when HTTP/2 is available |
+
+---
+
+### Import Discipline
+
+How you write `import` statements is the single biggest factor you control over tree-shaking effectiveness.
+
+**Avoid barrel imports from large libraries:**
+
+```typescript
+// BAD — forces the entire @angular/material bundle into scope
+import { MatButtonModule, MatIconModule, MatTableModule } from '@angular/material';
+
+// GOOD — each module is a discrete chunk; only imported ones are included
+import { MatButtonModule } from '@angular/material/button';
+import { MatIconModule } from '@angular/material/icon';
+```
+
+**Avoid side-effect imports unless necessary:**
+
+```typescript
+// BAD — prevents tree shaking of the entire module
+import 'rxjs/add/operator/map';
+
+// GOOD — pipeable operators are individually tree-shakeable
+import { map } from 'rxjs/operators';
+```
+
+**Use `import type` for type-only references (enforced by `verbatimModuleSyntax: true`):**
+
+```typescript
+// Type import — fully erased at compile time, zero bundle impact
+import type { User } from './models/user';
+
+// Value import — included in the bundle if the symbol is used at runtime
+import { UserService } from './services/user.service';
+```
+
+---
+
+### Tree Shaking Pipeline
+
+End-to-end flow showing where tree shaking fits in the Angular production build:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│               Angular Production Build Pipeline (ng build --prod)           │
+│                                                                              │
+│   src/main.ts                                                                │
+│       │                                                                      │
+│       │  Step 1: AOT Compiler (ngc)                                         │
+│       │  Templates → TypeScript factory functions                            │
+│       │  All dependencies become statically visible                          │
+│       │                                                                      │
+│       │  Step 2: esbuild / Webpack — Module Bundling                        │
+│       │  Traverses import graph from main.ts                                 │
+│       │  Marks every unreachable export as dead code                         │
+│       │                                                                      │
+│       │  Step 3: Terser — Minification + Tree Shaking                       │
+│       │  Eliminates dead code, mangles identifiers, compresses output        │
+│       │                                                                      │
+│       └──► dist/<app>/                                                       │
+│               ├── main.<hash>.js      ◄── app code, tree-shaken + minified  │
+│               ├── polyfills.<hash>.js ◄── browser compatibility shims       │
+│               ├── runtime.<hash>.js   ◄── webpack/esbuild bootstrap         │
+│               └── styles.<hash>.css   ◄── extracted and purged CSS          │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Tool Comparison
+
+| Tool | Tree Shaking | TypeScript | Angular Support | Notes |
+|------|-------------|------------|-----------------|-------|
+| **esbuild** (Angular 17+) | Yes | Yes | Native | Fastest build tool available; default in Angular 17+ |
+| **Webpack** (Angular <17) | Yes | Yes | Native | Mature ecosystem; slower than esbuild |
+| **Rollup** | Yes | Via plugin | Manual | Best for library builds, not Angular apps |
+| **Vite** | Yes | Yes | Via plugin | Popular for standalone TypeScript projects |
+| **Terser** | Partial | Post-compile | Via bundler | Minifier only — handles dead-code within a single file |
+| **uglify-js** | No | No | No | ES5 only; cannot parse modern Angular output |
+
+> **Angular 17+ note:** The default builder switched from `@angular-devkit/build-angular:browser` (Webpack) to `@angular-devkit/build-angular:application` (esbuild). esbuild performs tree shaking natively and is 10–100× faster than Webpack for large projects.
 
 ---
 
