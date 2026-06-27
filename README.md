@@ -1,6 +1,6 @@
 # TypeScript Demo
 
-> A professional TypeScript project setup from scratch — covering initialization, compiler configuration, and best practices for modern Node.js development.
+> A professional TypeScript project setup from scratch — covering initialization, compiler configuration, compilation, and execution best practices for modern Node.js development.
 
 ---
 
@@ -12,6 +12,9 @@
   - [1. Initialize the Node.js Project](#1-initialize-the-nodejs-project)
   - [2. Install TypeScript](#2-install-typescript)
   - [3. Initialize the TypeScript Compiler](#3-initialize-the-typescript-compiler)
+  - [4. Compile TypeScript to JavaScript](#4-compile-typescript-to-javascript)
+  - [5. Run the Compiled Output](#5-run-the-compiled-output)
+- [Compilation & Execution Workflow](#compilation--execution-workflow)
 - [TypeScript Configuration (tsconfig.json)](#typescript-configuration-tsconfigjson)
   - [File Layout](#file-layout)
   - [Environment Settings](#environment-settings)
@@ -32,8 +35,9 @@
 This repository demonstrates how to bootstrap a TypeScript project from zero using the standard toolchain, and documents the rationale behind every compiler option in `tsconfig.json`.
 
 Key goals:
-- Clear, reproducible setup with three commands
+- Clear, reproducible setup with five commands — from `npm init` to a running Node.js process
 - Fully annotated `tsconfig.json` with production-ready defaults
+- End-to-end compilation and execution workflow explained in depth
 - Foundation for any Node.js / React / full-stack TypeScript project
 
 ---
@@ -120,6 +124,147 @@ npx tsc --init
 - `npx` runs the locally installed `tsc` binary without requiring a global TypeScript installation.
 
 > **Best practice:** Always run `tsc` via `npx` or an npm script to ensure the project's pinned TypeScript version is used, not a global one that may differ across machines.
+
+---
+
+### 4. Compile TypeScript to JavaScript
+
+```bash
+npx tsc
+```
+
+**What this does:**
+
+- Invokes the TypeScript compiler using the settings defined in `tsconfig.json` — no extra flags required.
+- Reads all `.ts` source files starting from `rootDir` (or the project root if not set), type-checks them, and emits compiled artifacts to `outDir` (e.g., `dist/`).
+- Generates three output files per source file when `sourceMap`, `declaration`, and `declarationMap` are all enabled:
+
+  | Input | Output | Purpose |
+  |-------|--------|---------|
+  | `src/main.ts` | `dist/main.js` | Runnable JavaScript |
+  | `src/main.ts` | `dist/main.js.map` | Source map for debuggers |
+  | `src/main.ts` | `dist/main.d.ts` | Type declaration file |
+  | `src/main.ts` | `dist/main.d.ts.map` | Declaration source map |
+
+- If any type error is found, compilation **fails with a non-zero exit code** and no output is emitted. This makes `npx tsc` safe to use as a CI gate.
+
+**Common flags:**
+
+```bash
+npx tsc --noEmit          # Type-check only — do not write any output files
+npx tsc --watch           # Watch mode — recompile automatically on file save
+npx tsc --listFiles       # Print every file included in compilation
+npx tsc --diagnostics     # Show timing and memory usage per compilation phase
+npx tsc --project ./tsconfig.prod.json   # Use an alternate tsconfig
+```
+
+> **CI tip:** Run `npx tsc --noEmit` in your pipeline to enforce type safety without producing build artifacts that might be accidentally deployed from a CI runner.
+
+---
+
+### 5. Run the Compiled Output
+
+```bash
+node dist/main.js
+```
+
+**What this does:**
+
+- Executes the compiled JavaScript entry point directly with the Node.js runtime — no TypeScript involved at this stage.
+- `dist/` is the output directory configured in `tsconfig.json` via `"outDir"`. The file name mirrors your source entry point (`src/main.ts` → `dist/main.js`).
+- Node.js reads plain `.js` — TypeScript types, interfaces, and decorators are fully erased during compilation and add zero runtime overhead.
+
+**With source map support:**
+
+```bash
+node --enable-source-maps dist/main.js
+```
+
+When `"sourceMap": true` is set in `tsconfig.json`, the `--enable-source-maps` flag tells Node.js to translate compiled `.js` line numbers back to the original `.ts` source in stack traces. This is essential for debugging production errors.
+
+**Example stack trace comparison:**
+
+Without source maps:
+```
+TypeError: Cannot read properties of undefined
+    at dist/main.js:14:32
+```
+
+With `--enable-source-maps`:
+```
+TypeError: Cannot read properties of undefined
+    at greet (src/main.ts:8:12)
+```
+
+**Passing arguments and environment variables:**
+
+```bash
+# Pass environment variables inline
+NODE_ENV=production node dist/main.js
+
+# Pass CLI arguments (accessible via process.argv)
+node dist/main.js --port 3000 --verbose
+
+# Enable source maps and pass args together
+node --enable-source-maps dist/main.js --port 3000
+```
+
+> **Convention:** The entry file is named `main.ts` (compiled to `dist/main.js`) by convention for executables, and `index.ts` (compiled to `dist/index.js`) for libraries meant to be imported by other packages.
+
+---
+
+## Compilation & Execution Workflow
+
+The full end-to-end flow from source to running process:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       TypeScript Build Pipeline                         │
+│                                                                         │
+│   src/main.ts                                                           │
+│       │                                                                 │
+│       │  npx tsc  (reads tsconfig.json)                                 │
+│       │                                                                 │
+│       ├──► dist/main.js          ◄── runnable JavaScript               │
+│       ├──► dist/main.js.map      ◄── source map (debugger / Node.js)   │
+│       ├──► dist/main.d.ts        ◄── type declarations (npm consumers) │
+│       └──► dist/main.d.ts.map    ◄── declaration source map (IDEs)     │
+│                                                                         │
+│   node dist/main.js                                                     │
+│       │                                                                 │
+│       └──► process runs with zero TypeScript overhead                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Command sequence — from zero to running:**
+
+```bash
+npm init -y                          # 1. Create package.json
+npm install typescript --save-dev    # 2. Install TypeScript compiler
+npx tsc --init                       # 3. Generate tsconfig.json
+npx tsc                              # 4. Compile src/ → dist/
+node dist/main.js                    # 5. Execute compiled output
+```
+
+**Exit codes:**
+
+| Exit Code | Meaning |
+|-----------|---------|
+| `0` | Compilation succeeded / process exited cleanly |
+| `1` | TypeScript type errors found — no output emitted |
+| `2` | Invalid compiler options or malformed `tsconfig.json` |
+
+**Watch mode for development:**
+
+```bash
+# Terminal 1 — recompile on save
+npx tsc --watch
+
+# Terminal 2 — restart on new output
+node --watch dist/main.js
+```
+
+> Node.js `--watch` (available since v18.11) restarts the process whenever watched files change, removing the need for external tools like `nodemon` for basic development loops.
 
 ---
 
@@ -244,14 +389,18 @@ These are the core options that every modern TypeScript project should enable fr
 
 ```
 _TypescriptDemo/
-├── src/                  # TypeScript source files (recommended)
-│   └── index.ts
-├── dist/                 # Compiled JavaScript output (git-ignored)
-├── node_modules/         # npm dependencies (git-ignored)
+├── src/                  # TypeScript source files
+│   └── main.ts           # Entry point → compiled to dist/main.js
+├── dist/                 # Compiled output — git-ignored, generated by npx tsc
+│   ├── main.js           # Runnable JavaScript  →  node dist/main.js
+│   ├── main.js.map       # Source map (debuggers, --enable-source-maps)
+│   ├── main.d.ts         # Type declarations (npm consumers / IDEs)
+│   └── main.d.ts.map     # Declaration source map (Go-to-Definition)
+├── node_modules/         # npm dependencies — git-ignored
 ├── .gitignore
 ├── LICENSE
-├── package.json          # Project manifest and scripts
-├── package-lock.json     # Locked dependency tree
+├── package.json          # Project manifest and npm scripts
+├── package-lock.json     # Locked dependency tree (commit this)
 ├── tsconfig.json         # TypeScript compiler configuration
 └── README.md
 ```
@@ -266,21 +415,23 @@ Add these to the `scripts` section of `package.json`:
 {
   "scripts": {
     "build": "tsc",
+    "build:check": "tsc --noEmit",
     "build:watch": "tsc --watch",
     "clean": "rm -rf dist",
-    "start": "node dist/index.js",
-    "dev": "tsc --watch & node --watch dist/index.js"
+    "start": "node --enable-source-maps dist/main.js",
+    "dev": "tsc --watch & node --watch --enable-source-maps dist/main.js"
   }
 }
 ```
 
 | Script | Command | Description |
 |--------|---------|-------------|
-| `build` | `npm run build` | Runs the TypeScript compiler once and emits output to `dist/` |
-| `build:watch` | `npm run build:watch` | Watches source files and recompiles on every change |
-| `clean` | `npm run clean` | Removes the compiled output directory |
-| `start` | `npm start` | Runs the compiled entry point |
-| `dev` | `npm run dev` | Compiles in watch mode and restarts Node on output changes |
+| `build` | `npm run build` | Runs `npx tsc` — compiles all TypeScript source files to `dist/` |
+| `build:check` | `npm run build:check` | Type-checks with `tsc --noEmit` — no output emitted, safe for CI |
+| `build:watch` | `npm run build:watch` | Watches source files and recompiles on every save |
+| `clean` | `npm run clean` | Removes the `dist/` output directory entirely |
+| `start` | `npm start` | Runs `node dist/main.js` with source maps enabled for readable stack traces |
+| `dev` | `npm run dev` | Compiles in watch mode and auto-restarts Node.js via `--watch` on new output |
 
 ---
 
