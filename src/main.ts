@@ -241,7 +241,61 @@ function calculateArea(shape: Shape): number {
             throw new Error("Unknown shape");
     }
 }
+calculateArea({ kind: "circle", radius: 5 }); // Returns area of the circle
 
+// advanced
+// Goal: Write a reusable utility function that wraps any value 
+// into an array while retaining its exact type information
+
+
+const numberArray = wrapInArray(42); // Type: number[]
+const stringArray = wrapInArray("Hello"); // Type: string[]
+const booleanArray = wrapInArray(true); // Type: boolean[]
+const objectArray =
+  wrapInArray({ name: "Alice", age: 30 }); // Type: { name: string; age: number }[] 
+
+function wrapInArray<T>(value: T): T[] {
+    return [value];
+}
 
 
 // generics
+class Box<T> {
+    public content: T[] = [];
+}
+
+class StringBox extends Box<string> {
+    addContent(item: string): void {
+        this.content.push(item);
+    }
+
+}
+class NumberBox extends Box<number> {
+    addContent(item: number): void {
+        this.content.push(item);
+    }
+
+    otherMethod(): void {
+        console.log("This is another method in NumberBox");
+    }
+}
+
+// all is a decorator
+function addMetadata(metadata: {version: string, externalName: string}){
+  return function(constructor: Function){
+    constructor.prototype.version = metadata.version;
+    constructor.prototype.externalName = metadata.externalName;
+  }
+}
+
+@addMetadata({version: "1.0.0", externalName: "MyClass"})
+class MyClass {
+  // Class implementation
+  constructor(public name: string) {}
+}
+
+const myClassInstance = new MyClass("Example");
+console.log(myClassInstance.name); // Output: Example
+console.log((myClassInstance as any).version); // Output: 1.0.0
+console.log((myClassInstance as any).externalName); // Output: MyClass
+
