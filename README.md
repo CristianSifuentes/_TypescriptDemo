@@ -39,6 +39,13 @@
   - [Import Discipline](#import-discipline)
   - [Tree Shaking Pipeline](#tree-shaking-pipeline)
   - [Tool Comparison](#tool-comparison-1)
+- [Compiler vs Transpiler](#compiler-vs-transpiler)
+  - [What is a Compiler?](#what-is-a-compiler)
+  - [What is a Transpiler?](#what-is-a-transpiler)
+  - [Quick Comparison](#quick-comparison)
+  - [Is TypeScript tsc a Compiler or a Transpiler?](#is-typescript-tsc-a-compiler-or-a-transpiler)
+  - [How the TypeScript Pipeline Works](#how-the-typescript-pipeline-works)
+  - [Alternative Build Tools](#alternative-build-tools)
 - [Elvis Operator in TypeScript](#elvis-operator-in-typescript)
   - [Optional Chaining (?.)](#optional-chaining-)
   - [Nullish Coalescing (??)](#nullish-coalescing-)
@@ -838,6 +845,185 @@ End-to-end flow showing where tree shaking fits in the Angular production build:
 | **uglify-js** | No | No | No | ES5 only; cannot parse modern Angular output |
 
 > **Angular 17+ note:** The default builder switched from `@angular-devkit/build-angular:browser` (Webpack) to `@angular-devkit/build-angular:application` (esbuild). esbuild performs tree shaking natively and is 10–100× faster than Webpack for large projects.
+
+---
+
+## Compiler vs Transpiler
+
+Understanding what `tsc` actually does under the hood — and how it differs from a traditional compiler — is foundational to working confidently with TypeScript toolchains.
+
+---
+
+### What is a Compiler?
+
+A **compiler** is any tool that translates source code written in one language into another language. In the traditional sense, this means transforming a high-level human-readable language into low-level machine code or bytecode that a processor or virtual machine can execute directly.
+
+**Examples of traditional compilers:**
+
+| Source Language | Output | Executed By |
+|----------------|--------|-------------|
+| C / C++ | Native machine code (binary) | CPU directly |
+| Java | JVM bytecode (`.class` files) | Java Virtual Machine |
+| C# | CIL bytecode (`.dll` / `.exe`) | .NET CLR |
+| Rust | Native machine code | CPU directly |
+
+The defining characteristic is the **dramatic drop in abstraction level** — from human-readable source to something the machine can natively execute without further translation.
+
+---
+
+### What is a Transpiler?
+
+A **transpiler** (short for *source-to-source compiler*) is a specific subtype of compiler that translates code between two languages that operate at a **similar level of abstraction**. The output remains human-readable source code rather than bytecode or binary.
+
+**Examples of transpilers:**
+
+| Source Language | Output Language | Tool |
+|----------------|----------------|------|
+| TypeScript | JavaScript | `tsc` |
+| Modern JS (ES2022+) | Legacy JS (ES5) | Babel |
+| Sass / SCSS | CSS | `sass` compiler |
+| CoffeeScript | JavaScript | `coffee` |
+| JSX | JavaScript | Babel / esbuild |
+
+The defining characteristic is that **abstraction level is preserved** — a developer could read and understand the output without specialized knowledge of assembly or bytecode formats.
+
+---
+
+### Quick Comparison
+
+| Feature | Compiler (Traditional) | Transpiler (Source-to-Source) |
+|---------|----------------------|-------------------------------|
+| **Output target** | Machine code, assembly, or bytecode | Another high-level source language |
+| **Abstraction level** | Drops drastically | Remains at a similar level |
+| **Human readability** | Output is binary or unreadable | Output is readable source code |
+| **Debuggability** | Requires debug symbols / DWARF | Output is directly readable; source maps optional |
+| **Runtime required** | None (native) or VM (JVM/.NET) | Host language runtime (Node.js, browser) |
+| **TypeScript context** | The tool is officially named *TypeScript Compiler* (`tsc`) | Its emit phase strips types → produces JS (transpilation) |
+
+---
+
+### Is TypeScript tsc a Compiler or a Transpiler?
+
+**It is both** — and the distinction depends on which phase of `tsc`'s pipeline you are describing.
+
+Microsoft officially named the tool the **TypeScript Compiler (`tsc`)** because it performs the full set of operations associated with a traditional compiler:
+
+- **Lexical analysis** — tokenizes raw `.ts` source text
+- **Parsing** — builds an Abstract Syntax Tree (AST)
+- **Semantic analysis** — resolves symbols, checks types across files, catches errors
+
+These phases are identical in complexity to a traditional compiler front-end. However, the **emit phase** — the final output step — simply strips type annotations and generates plain JavaScript. The output is human-readable, at the same abstraction level as the input, and requires a JavaScript runtime to execute.
+
+This makes `tsc` structurally a **transpiler** at the emit stage, even though it performs the analysis work of a full compiler.
+
+> **Practical takeaway:** When someone says "TypeScript compiles to JavaScript," both terms are technically correct. "Transpiles" is more precise about the nature of the output; "compiles" is accurate about the depth of analysis performed.
+
+---
+
+### How the TypeScript Pipeline Works
+
+`tsc` processes source files in three sequential phases:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        TypeScript Compiler Pipeline                         │
+│                                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────┐  │
+│  │   Phase 1    │    │   Phase 2    │    │   Phase 3    │    │  Output  │  │
+│  │   Parsing    │───►│Type Checking │───►│   Emitting   │───►│  dist/   │  │
+│  └──────────────┘    └──────────────┘    └──────────────┘    └──────────┘  │
+│                                                                             │
+│  src/main.ts                                                                │
+│      │                                                                      │
+│      │  PHASE 1 — Parsing                                                  │
+│      │  Lexer tokenizes raw text → Parser builds Abstract Syntax Tree      │
+│      │  Every identifier, type annotation, and expression becomes a node   │
+│      │                                                                      │
+│      │  PHASE 2 — Type Checking                                            │
+│      │  Symbol resolver binds names across files                           │
+│      │  Type checker validates assignments, function signatures, generics  │
+│      │  Errors reported here — no output emitted on failure                │
+│      │                                                                      │
+│      │  PHASE 3 — Emitting (Transpilation)                                 │
+│      │  Type annotations, interfaces, and enums are erased                 │
+│      │  Remaining AST is serialized back to JavaScript source              │
+│      │                                                                      │
+│      └──► dist/main.js        ◄── human-readable JavaScript               │
+│           dist/main.js.map    ◄── source map (AST position mapping)       │
+│           dist/main.d.ts      ◄── re-exported type declarations           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**What gets erased in Phase 3:**
+
+```typescript
+// TypeScript source (src/main.ts)
+interface User {
+  id: number;
+  name: string;
+}
+
+function greet(user: User): string {
+  return `Hello, ${user.name}`;
+}
+
+const u: User = { id: 1, name: "Alice" };
+console.log(greet(u));
+```
+
+```javascript
+// Compiled output (dist/main.js) — types fully erased
+function greet(user) {
+  return `Hello, ${user.name}`;
+}
+
+const u = { id: 1, name: "Alice" };
+console.log(greet(u));
+```
+
+Everything erased by the emit phase:
+
+| Erased construct | Example |
+|-----------------|---------|
+| `interface` declarations | `interface User { ... }` |
+| `type` aliases | `type ID = string \| number` |
+| Type annotations | `: string`, `: User`, `: Promise<void>` |
+| Generic type parameters | `<T>`, `Array<string>` |
+| `enum` (const enum) | `const enum Direction { Up, Down }` |
+| Access modifiers | `private`, `protected`, `readonly` |
+| Non-null assertions | `value!.property` |
+| `as` casts | `value as string` |
+
+> **Zero runtime overhead:** Because all type information is erased before execution, TypeScript's type system adds **no performance cost at runtime**. The running JavaScript is identical to what a developer would have written by hand — just with more confidence in its correctness.
+
+---
+
+### Alternative Build Tools
+
+`tsc` is not the only tool that can process TypeScript. Faster alternatives take a different approach: they **skip type checking entirely** during the build, treating type annotations as comments to be stripped rather than semantics to be verified. This makes them 10–100× faster, at the cost of requiring a separate type-check step.
+
+| Tool | Approach | Type Checking | Speed | Best For |
+|------|----------|--------------|-------|----------|
+| `tsc` | Full compiler + transpiler | Yes (full) | Baseline | Projects where type safety is the priority |
+| **Babel** (`@babel/preset-typescript`) | Strips types, transpiles JS | No | ~10× faster | Projects already using Babel for JS transforms |
+| **SWC** (`@swc/core`) | Rust-based type stripper | No | ~70× faster | Large codebases, CI pipelines, Next.js |
+| **esbuild** | Go-based bundler + stripper | No | ~100× faster | Bundling, Angular 17+, Vite internals |
+| **Oxc** | Rust-based, Babel-compatible | No | ~200× faster | Emerging — Vite 6+ experimental |
+
+**Recommended workflow for large projects:**
+
+```bash
+# Fast build (no type checking) — use during development
+npx swc src -d dist
+
+# Type checking only — run in CI or pre-commit
+npx tsc --noEmit
+
+# Full production build — type check then bundle
+npx tsc --noEmit && npx esbuild src/main.ts --bundle --outfile=dist/main.js
+```
+
+> **Key insight:** Babel, SWC, and esbuild are pure **transpilers** — they perform no semantic analysis. `tsc` is a **compiler that also transpiles**. In practice, most production pipelines use a fast transpiler for builds and `tsc --noEmit` as a separate type-safety gate in CI.
 
 ---
 
